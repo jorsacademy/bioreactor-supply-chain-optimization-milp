@@ -31,5 +31,8 @@ jobs:
       - name: Run tests
         run: pytest
 
-      - name: Run example
+      - name: Run deterministic example
         run: python bioreactor_supply_chain.py
+
+      - name: Run robust procurement example
+        run: python robust_procurement_model.py
