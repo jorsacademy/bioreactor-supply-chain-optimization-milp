@@ -36,3 +36,6 @@ jobs:
 
       - name: Run robust procurement example
         run: python robust_procurement_model.py
+
+      - name: Run Bertsimas-Sim budgeted robust example
+        run: python budgeted_robust_procurement_model.py
