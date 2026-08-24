@@ -1,52 +1,121 @@
 # Bioreactor Supply Chain Optimization MILP
 
-A deterministic mixed-integer linear programming model for multi-period bioreactor production and distribution planning.
+This repository contains mixed-integer linear programming models for multi-period bioreactor supply-chain planning.
 
-The model represents a two-echelon supply chain:
+All entities, costs, capacities, and demand values are synthetic. No real or disguised company names, brands, or proprietary operating data are used.
+
+The repository now contains two models:
+
+1. A deterministic production and distribution model.
+2. An extended robust model with raw-material procurement, supplier capacities, bills of materials, procurement lead times, and demand uncertainty.
+
+## Network Structures
+
+Deterministic model:
 
 `Plants -> Distribution Centers -> Markets`
 
-It jointly optimizes production quantities, setup decisions, plant inventory, distribution-center inventory, and transportation flows while respecting production limits, inventory capacities, exact market demand, and plant-to-distribution-center lead times.
+Robust procurement model:
+
+`Suppliers -> Plants -> Distribution Centers -> Markets`
 
 ## Scope
 
-This repository is an Operations Research example intended for educational, research, and other non-commercial use.
+This project is an Operations Research example intended for educational, research, and other non-commercial use.
 
-All entities and data are synthetic. The repository does not use real company names, brands, or proprietary business data.
+Commercial use is prohibited under the repository license.
 
-## Key Features
+## Deterministic Model
 
-- Multi-period mixed-integer linear programming formulation
-- Multiple plants, distribution centers, markets, and bioreactor types
+The deterministic implementation is located in:
+
+```text
+bioreactor_supply_chain.py
+```
+
+It jointly optimizes:
+
+- Product-specific production quantities
 - Binary production setup decisions
-- Plant and distribution-center inventory balance equations
-- Explicit plant-to-DC transportation lead times
-- Exact demand satisfaction
-- Planning-horizon protection against late shipments
-- Input validation before model construction
-- Solver-status validation before result extraction
-- Real objective-function cost decomposition
-- CSV result export
-- Matplotlib visualization
-- Automated regression tests
-- Reproducible synthetic sample instance
+- Plant inventory
+- Distribution-center inventory
+- Plant-to-DC shipments
+- DC-to-market shipments
 
-## Model Structure
+The formulation includes production limits, inventory capacities, exact demand satisfaction, plant-to-DC transportation lead times, and protection against shipments that would arrive after the planning horizon.
 
-### Decision Variables
+## Robust Procurement Model
 
-For each applicable period and network entity:
+The extended implementation is located in:
 
-- `Production[t, p, k]`: units of product `k` produced at plant `p`
-- `Setup[t, p, k]`: binary setup decision for product `k` at plant `p`
-- `PlantInventory[t, p, k]`: end-of-period inventory at plant `p`
-- `DCInventory[t, d, k]`: end-of-period inventory at distribution center `d`
-- `PlantToDC[t, p, d, k]`: units dispatched from plant `p` to DC `d`
-- `DCToMarket[t, d, m, k]`: units shipped from DC `d` to market `m`
+```text
+robust_procurement_model.py
+```
 
-### Objective
+This model adds a complete upstream procurement layer:
 
-The objective minimizes total supply-chain cost:
+`Suppliers -> Plants`
+
+and explicitly represents raw materials consumed during bioreactor production.
+
+### Additional Decision Variables
+
+- `Procurement[t, s, p, r]`: raw material `r` ordered from supplier `s` for plant `p`
+- `RawInventory[t, p, r]`: end-of-period raw-material inventory at plant `p`
+
+The downstream production and distribution variables remain explicit.
+
+### Raw-Material Constraints
+
+The robust model includes:
+
+1. Supplier capacity by period and raw material
+2. Supplier-to-plant procurement lead times
+3. Raw-material inventory conservation
+4. Raw-material storage capacity
+5. Product-specific bills of materials
+6. Material consumption linked directly to production decisions
+7. Prevention of procurement orders that would arrive after the planning horizon
+
+For each plant and raw material, the inventory balance has the form:
+
+```text
+Ending Raw Inventory
+= Previous Raw Inventory
++ Arriving Procurement
+- Production Consumption
+```
+
+Production consumption is calculated from the bill of materials:
+
+```text
+Consumption[p, r, t]
+= sum(BOM[k, r] * Production[t, p, k])
+```
+
+## Robust Demand Formulation
+
+Demand uncertainty is modeled using an interval, or box, uncertainty set.
+
+For each period, market, and product:
+
+```text
+Demand in [Nominal Demand, Nominal Demand + Maximum Deviation]
+```
+
+The robust demand requirement is therefore:
+
+```text
+Delivered[t, m, k] >= NominalDemand[t, m, k] + DemandDeviation[t, m, k]
+```
+
+This protects the plan against the simultaneous upper endpoint of every specified demand interval.
+
+This is a conservative robust formulation by design. It does not use probability distributions or scenario probabilities. It is appropriate when demand deviations are interpreted as hard uncertainty bounds rather than statistical forecasts.
+
+## Objective Function
+
+The deterministic model minimizes:
 
 - Manufacturing cost
 - Production setup cost
@@ -55,29 +124,29 @@ The objective minimizes total supply-chain cost:
 - Plant-to-DC transportation cost
 - DC-to-market transportation cost
 
-The reported cost breakdown is calculated directly from the solved objective components. No placeholder percentages are used.
+The robust procurement model additionally includes:
 
-### Main Constraints
+- Raw-material procurement cost
+- Supplier-to-plant transportation cost
+- Raw-material inventory holding cost
 
-1. Total production capacity at each plant and period
-2. Product-specific production capacity linked to binary setup decisions
-3. Plant inventory conservation
-4. Plant inventory capacity
-5. Distribution-center inventory conservation
-6. Distribution-center inventory capacity
-7. Exact market-demand satisfaction
-8. Transportation lead-time synchronization
-9. Prevention of shipments that would arrive after the planning horizon
+All reported cost components are calculated directly from the solved objective expression. No placeholder percentages are used.
 
 ## Lead-Time Logic
 
-A shipment dispatched from plant `p` to distribution center `d` in period `tau` is available at the DC only in period:
+A procurement order dispatched from supplier `s` to plant `p` in period `tau` becomes available in:
 
-`tau + lead_time[p][d]`
+```text
+tau + procurement_lead_time[s][p]
+```
 
-The model therefore distinguishes shipment departure from shipment arrival. This avoids the invalid same-period flow logic that often causes incorrect or infeasible multi-period supply-chain models.
+A finished-product shipment dispatched from plant `p` to DC `d` in period `tau` becomes available in:
 
-The sample instance includes initial DC inventory so first-period demand can be served before newly produced units arrive.
+```text
+tau + distribution_lead_time[p][d]
+```
+
+The model therefore separates departure periods from arrival periods at both upstream and downstream echelons.
 
 ## Installation
 
@@ -85,88 +154,97 @@ Python 3.10 or newer is recommended.
 
 ```bash
 python -m venv .venv
-```
-
-Activate the environment and install dependencies:
-
-```bash
 pip install -r requirements.txt
 ```
 
-The model uses PuLP with the CBC solver. Many PuLP installations include a CBC binary. If CBC is not available on your system, install the Coin-OR CBC solver separately.
+The models use PuLP with the CBC MILP solver. Many PuLP installations include CBC. If CBC is unavailable on the host system, install the Coin-OR CBC solver separately.
 
-## Run
+## Run the Deterministic Model
 
 ```bash
 python bioreactor_supply_chain.py
 ```
 
-A successful run prints the optimization status, total cost, production volume, shipment totals, and objective decomposition.
+The deterministic model exports CSV result tables and a summary visualization to the `results/` directory.
 
-It also creates a `results/` directory containing:
+## Run the Robust Procurement Model
 
-```text
-results/
-├── cost_breakdown.csv
-├── dc_to_market.csv
-├── inventory.csv
-├── plant_to_dc.csv
-├── production.csv
-└── summary.png
+```bash
+python robust_procurement_model.py
 ```
+
+A successful run prints:
+
+- Solver status
+- Total optimized cost
+- Total raw-material procurement
+- Total bioreactor production
+- Total market deliveries
+- Actual objective cost decomposition
 
 ## Tests
 
-Run the regression suite with:
+Run the complete regression suite with:
 
 ```bash
 pytest -q
 ```
 
-The tests verify:
+The tests cover both formulations.
+
+Deterministic tests verify:
 
 - Optimal solver status
-- Positive production in the sample instance
+- Positive production
 - Exact demand satisfaction
-- Distribution-center balance equations with lead times
-- Equality between objective value and reported cost components
-- Preservation of zero-valued decisions in result tables
-- Rejection of invalid first-period inventory data
+- Distribution-center inventory balance with lead times
+- Objective decomposition
+- Preservation of zero-valued decisions
+- Input validation
 
-## Reproducibility
+Robust procurement tests verify:
 
-The included sample data are deterministic. Running the same model with the same solver configuration should produce the same optimal objective value and an equivalent optimal plan.
+- Optimal solver status
+- Positive procurement and production
+- Satisfaction of the robust demand upper bound
+- Raw-material balance with procurement lead times
+- Bill-of-material consumption accounting
+- Objective decomposition
+- Rejection of negative demand deviations
+- Rejection of insufficient first-period robust inventory
 
-No random demand, random transportation cost, or hidden state is used.
+## Model Design Choices
 
-## Repository Design Choices
+Direct plant-to-market shipment is intentionally excluded. The downstream network therefore remains a strict two-echelon distribution structure.
 
-Direct plant-to-market shipments are intentionally excluded. This keeps the model consistent with a strict two-echelon distribution structure and prevents distribution centers from becoming irrelevant because of artificially cheap direct arcs.
+Inter-DC shipment is also excluded. It can be introduced as a separate transshipment decision class if required.
 
-Inter-DC shipments are also excluded. They can be added in a future extension as a separate transshipment decision class with its own lead times and costs.
+The robust model currently uses box uncertainty. This means every demand component is protected up to its specified maximum deviation at the same time. The formulation is transparent and fully linear, but more conservative than budgeted or probabilistic uncertainty models.
 
-All decision values, including zeros, are retained in exported result tables. This avoids misleading plots or summaries caused by filtering out inactive periods.
+## Future Extensions
 
-The solver output is read only after PuLP reports an `Optimal` solution. If the model is infeasible or otherwise unsolved, the program raises an error instead of reporting stale or invalid variable values.
+Natural extensions include:
 
-## Possible Extensions
-
-The formulation can be extended with:
-
+- Bertsimas-Sim budgeted robust optimization
+- Two-stage stochastic programming with scenario probabilities
+- Scenario-dependent recourse decisions
+- Chance constraints
 - Backorders and lost sales
 - Service-level constraints
 - Safety stock
-- Supplier procurement decisions
-- Raw-material availability
-- Production resource consumption by product type
+- Supplier minimum-order quantities
+- Supplier fixed-order costs
+- Supplier disruption scenarios
+- Multi-source qualification constraints
+- Yield uncertainty
 - Capacity expansion
 - Overtime
 - Carbon-emission objectives or constraints
-- Scenario-based stochastic demand
-- Robust optimization
 - Multi-objective optimization
-- Inter-DC transshipment
-- Customer delivery lead times
+
+## Reproducibility
+
+The included examples are deterministic and synthetic. No random demand, random transportation costs, external APIs, proprietary datasets, or hidden state are required.
 
 ## License
 
@@ -176,4 +254,4 @@ See [LICENSE](LICENSE) for the complete terms.
 
 ## Disclaimer
 
-This project is a synthetic Operations Research example. It is not production-planning advice, regulatory guidance, or a validated model for any specific manufacturing operation.
+This project is a synthetic Operations Research example. It is not production-planning advice, regulatory guidance, procurement advice, or a validated model for any specific manufacturing operation.
