@@ -4,10 +4,11 @@ This repository contains mixed-integer linear programming models for multi-perio
 
 All entities, costs, capacities, and demand values are synthetic. No real or disguised company names, brands, or proprietary operating data are used.
 
-The repository now contains two models:
+The repository contains three models:
 
 1. A deterministic production and distribution model.
-2. An extended robust model with raw-material procurement, supplier capacities, bills of materials, procurement lead times, and demand uncertainty.
+2. A robust procurement model with raw-material sourcing and box demand uncertainty.
+3. A Bertsimas-Sim budgeted robust procurement model with an adjustable uncertainty budget.
 
 ## Network Structures
 
@@ -15,7 +16,7 @@ Deterministic model:
 
 `Plants -> Distribution Centers -> Markets`
 
-Robust procurement model:
+Procurement models:
 
 `Suppliers -> Plants -> Distribution Centers -> Markets`
 
@@ -33,26 +34,19 @@ The deterministic implementation is located in:
 bioreactor_supply_chain.py
 ```
 
-It jointly optimizes:
-
-- Product-specific production quantities
-- Binary production setup decisions
-- Plant inventory
-- Distribution-center inventory
-- Plant-to-DC shipments
-- DC-to-market shipments
+It jointly optimizes product-specific production quantities, binary setup decisions, plant inventory, distribution-center inventory, plant-to-DC shipments, and DC-to-market shipments.
 
 The formulation includes production limits, inventory capacities, exact demand satisfaction, plant-to-DC transportation lead times, and protection against shipments that would arrive after the planning horizon.
 
-## Robust Procurement Model
+## Box-Robust Procurement Model
 
-The extended implementation is located in:
+The upstream procurement implementation is located in:
 
 ```text
 robust_procurement_model.py
 ```
 
-This model adds a complete upstream procurement layer:
+This model adds a complete upstream layer:
 
 `Suppliers -> Plants`
 
@@ -63,21 +57,84 @@ and explicitly represents raw materials consumed during bioreactor production.
 - `Procurement[t, s, p, r]`: raw material `r` ordered from supplier `s` for plant `p`
 - `RawInventory[t, p, r]`: end-of-period raw-material inventory at plant `p`
 
-The downstream production and distribution variables remain explicit.
+The model includes supplier capacity, supplier-to-plant lead times, raw-material inventory conservation, raw-material storage capacity, bills of materials, and production-linked material consumption.
 
-### Raw-Material Constraints
+The box-robust formulation protects every demand component at its maximum specified deviation:
 
-The robust model includes:
+```text
+Delivered[t, m, k] >= NominalDemand[t, m, k] + DemandDeviation[t, m, k]
+```
 
-1. Supplier capacity by period and raw material
-2. Supplier-to-plant procurement lead times
-3. Raw-material inventory conservation
-4. Raw-material storage capacity
-5. Product-specific bills of materials
-6. Material consumption linked directly to production decisions
-7. Prevention of procurement orders that would arrive after the planning horizon
+This is intentionally conservative because all demand deviations are protected simultaneously.
 
-For each plant and raw material, the inventory balance has the form:
+## Bertsimas-Sim Budgeted Robust Procurement Model
+
+The budgeted robust implementation is located in:
+
+```text
+budgeted_robust_procurement_model.py
+```
+
+It uses the same four-echelon network and raw-material procurement logic, but replaces simultaneous full box protection with a Bertsimas-Sim uncertainty budget.
+
+For each period `t` and product `k`, the user specifies:
+
+```text
+Gamma[t, k]
+```
+
+where:
+
+```text
+0 <= Gamma[t, k] <= number of markets
+```
+
+The demand deviations for that period-product pair are sorted from largest to smallest. If:
+
+```text
+Gamma = q + alpha
+```
+
+with integer `q = floor(Gamma)` and `0 <= alpha < 1`, the protection term is:
+
+```text
+Protection = sum(q largest deviations) + alpha * next-largest deviation
+```
+
+The aggregate protected demand is therefore:
+
+```text
+ProtectedTotalDemand[t, k]
+= SumMarketNominalDemand[t, k]
++ Protection[t, k]
+```
+
+Every market must still receive at least its nominal demand:
+
+```text
+Delivered[t, m, k] >= NominalDemand[t, m, k]
+```
+
+and aggregate deliveries across markets must equal the protected total:
+
+```text
+sum_m Delivered[t, m, k] = ProtectedTotalDemand[t, k]
+```
+
+This formulation interprets the Bertsimas-Sim budget across market-level demand deviations for each period-product pair. It protects aggregate product demand while preventing any market from receiving less than its nominal requirement.
+
+### Interpretation of Gamma
+
+- `Gamma = 0`: nominal demand only
+- `Gamma = 1`: protection against the largest market deviation
+- `Gamma = number of markets`: equivalent aggregate protection to the full box upper bound
+- Fractional `Gamma`: partial protection against the next-largest deviation
+
+This provides a tunable conservatism parameter rather than assuming every market reaches its maximum deviation simultaneously.
+
+## Raw-Material Logic
+
+For each plant and raw material:
 
 ```text
 Ending Raw Inventory
@@ -93,25 +150,7 @@ Consumption[p, r, t]
 = sum(BOM[k, r] * Production[t, p, k])
 ```
 
-## Robust Demand Formulation
-
-Demand uncertainty is modeled using an interval, or box, uncertainty set.
-
-For each period, market, and product:
-
-```text
-Demand in [Nominal Demand, Nominal Demand + Maximum Deviation]
-```
-
-The robust demand requirement is therefore:
-
-```text
-Delivered[t, m, k] >= NominalDemand[t, m, k] + DemandDeviation[t, m, k]
-```
-
-This protects the plan against the simultaneous upper endpoint of every specified demand interval.
-
-This is a conservative robust formulation by design. It does not use probability distributions or scenario probabilities. It is appropriate when demand deviations are interpreted as hard uncertainty bounds rather than statistical forecasts.
+Procurement orders become available only after the supplier-to-plant lead time.
 
 ## Objective Function
 
@@ -124,7 +163,7 @@ The deterministic model minimizes:
 - Plant-to-DC transportation cost
 - DC-to-market transportation cost
 
-The robust procurement model additionally includes:
+The procurement models additionally include:
 
 - Raw-material procurement cost
 - Supplier-to-plant transportation cost
@@ -146,7 +185,7 @@ A finished-product shipment dispatched from plant `p` to DC `d` in period `tau` 
 tau + distribution_lead_time[p][d]
 ```
 
-The model therefore separates departure periods from arrival periods at both upstream and downstream echelons.
+Late procurement and distribution decisions that would arrive after the planning horizon are forced to zero.
 
 ## Installation
 
@@ -159,28 +198,25 @@ pip install -r requirements.txt
 
 The models use PuLP with the CBC MILP solver. Many PuLP installations include CBC. If CBC is unavailable on the host system, install the Coin-OR CBC solver separately.
 
-## Run the Deterministic Model
+## Run the Models
+
+Deterministic model:
 
 ```bash
 python bioreactor_supply_chain.py
 ```
 
-The deterministic model exports CSV result tables and a summary visualization to the `results/` directory.
-
-## Run the Robust Procurement Model
+Box-robust procurement model:
 
 ```bash
 python robust_procurement_model.py
 ```
 
-A successful run prints:
+Bertsimas-Sim budgeted robust procurement model:
 
-- Solver status
-- Total optimized cost
-- Total raw-material procurement
-- Total bioreactor production
-- Total market deliveries
-- Actual objective cost decomposition
+```bash
+python budgeted_robust_procurement_model.py
+```
 
 ## Tests
 
@@ -190,28 +226,35 @@ Run the complete regression suite with:
 pytest -q
 ```
 
-The tests cover both formulations.
-
-Deterministic tests verify:
+The test suite covers:
 
 - Optimal solver status
-- Positive production
-- Exact demand satisfaction
-- Distribution-center inventory balance with lead times
+- Exact deterministic demand satisfaction
+- Distribution-center inventory balances with lead times
+- Raw-material inventory conservation
+- Procurement lead-time accounting
+- Bill-of-material consumption
 - Objective decomposition
-- Preservation of zero-valued decisions
+- Box-robust demand protection
+- Bertsimas-Sim protection calculations
+- Fractional uncertainty budgets
+- Nominal per-market service under budgeted robustness
+- Aggregate protected-demand equality
+- Invalid uncertainty-budget rejection
 - Input validation
 
-Robust procurement tests verify:
+## Comparing Robustness Levels
 
-- Optimal solver status
-- Positive procurement and production
-- Satisfaction of the robust demand upper bound
-- Raw-material balance with procurement lead times
-- Bill-of-material consumption accounting
-- Objective decomposition
-- Rejection of negative demand deviations
-- Rejection of insufficient first-period robust inventory
+The three formulations provide a natural conservatism ladder:
+
+```text
+Deterministic
+    < Budgeted Robust with small Gamma
+    < Budgeted Robust with large Gamma
+    <= Full Box Robust
+```
+
+The budgeted robust formulation is useful when it is implausible that all market demand deviations reach their maximum simultaneously.
 
 ## Model Design Choices
 
@@ -219,13 +262,12 @@ Direct plant-to-market shipment is intentionally excluded. The downstream networ
 
 Inter-DC shipment is also excluded. It can be introduced as a separate transshipment decision class if required.
 
-The robust model currently uses box uncertainty. This means every demand component is protected up to its specified maximum deviation at the same time. The formulation is transparent and fully linear, but more conservative than budgeted or probabilistic uncertainty models.
+The Bertsimas-Sim extension applies the uncertainty budget across market demand deviations for each product and period. It is an aggregate-demand protection model, not a probabilistic model and not a scenario-based stochastic program.
 
 ## Future Extensions
 
 Natural extensions include:
 
-- Bertsimas-Sim budgeted robust optimization
 - Two-stage stochastic programming with scenario probabilities
 - Scenario-dependent recourse decisions
 - Chance constraints
